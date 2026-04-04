@@ -7022,18 +7022,16 @@ mod tests {
             &[
                 Header(GitHeaderEntry { header: Section::Unstaged }),
                 Status(GitStatusEntry { staging: StageStatus::Unstaged, .. }),
-                Header(GitHeaderEntry { header: Section::Unstaged }),
                 Status(GitStatusEntry { staging: StageStatus::Unstaged, .. }),
                 Status(GitStatusEntry { staging: StageStatus::Unstaged, .. }),
                 Status(GitStatusEntry { staging: StageStatus::Unstaged, .. }),
-                Header(GitHeaderEntry { header: Section::Unstaged }),
                 Status(GitStatusEntry { staging: StageStatus::Unstaged, .. }),
                 Status(GitStatusEntry { staging: StageStatus::Unstaged, .. }),
                 Status(GitStatusEntry { staging: StageStatus::Unstaged, .. }),
             ],
         );
 
-        let second_status_entry = entries[3].clone();
+        let second_status_entry = entries[2].clone();
         panel.update_in(cx, |panel, window, cx| {
             panel.toggle_staged_for_entry(&second_status_entry, window, cx);
         });
@@ -7069,14 +7067,13 @@ mod tests {
         pretty_assertions::assert_matches!(
             entries.as_slice(),
             &[
+                Header(GitHeaderEntry { header: Section::Staged }),
+                Status(GitStatusEntry { staging: StageStatus::Staged, .. }),
+                Status(GitStatusEntry { staging: StageStatus::Staged, .. }),
+                Status(GitStatusEntry { staging: StageStatus::Staged, .. }),
+                Status(GitStatusEntry { staging: StageStatus::Staged, .. }),
+                Status(GitStatusEntry { staging: StageStatus::Staged, .. }),
                 Header(GitHeaderEntry { header: Section::Unstaged }),
-                Status(GitStatusEntry { staging: StageStatus::Unstaged, .. }),
-                Header(GitHeaderEntry { header: Section::Unstaged }),
-                Status(GitStatusEntry { staging: StageStatus::Staged, .. }),
-                Status(GitStatusEntry { staging: StageStatus::Staged, .. }),
-                Status(GitStatusEntry { staging: StageStatus::Staged, .. }),
-                Header(GitHeaderEntry { header: Section::Unstaged }),
-                Status(GitStatusEntry { staging: StageStatus::Staged, .. }),
                 Status(GitStatusEntry { staging: StageStatus::Unstaged, .. }),
                 Status(GitStatusEntry { staging: StageStatus::Unstaged, .. }),
             ],
@@ -7088,7 +7085,7 @@ mod tests {
         });
 
         panel.update_in(cx, |panel, window, cx| {
-            panel.selected_entry = Some(9);
+            panel.selected_entry = Some(8);
             panel.stage_range(&git::StageRange, window, cx);
         });
 
@@ -7118,16 +7115,15 @@ mod tests {
         pretty_assertions::assert_matches!(
             entries.as_slice(),
             &[
+                Header(GitHeaderEntry { header: Section::Staged }),
+                Status(GitStatusEntry { staging: StageStatus::Staged, .. }),
+                Status(GitStatusEntry { staging: StageStatus::Staged, .. }),
+                Status(GitStatusEntry { staging: StageStatus::Staged, .. }),
+                Status(GitStatusEntry { staging: StageStatus::Staged, .. }),
                 Header(GitHeaderEntry { header: Section::Unstaged }),
                 Status(GitStatusEntry { staging: StageStatus::Unstaged, .. }),
-                Header(GitHeaderEntry { header: Section::Unstaged }),
-                Status(GitStatusEntry { staging: StageStatus::Staged, .. }),
                 Status(GitStatusEntry { staging: StageStatus::Unstaged, .. }),
-                Status(GitStatusEntry { staging: StageStatus::Staged, .. }),
-                Header(GitHeaderEntry { header: Section::Unstaged }),
-                Status(GitStatusEntry { staging: StageStatus::Staged, .. }),
-                Status(GitStatusEntry { staging: StageStatus::Staged, .. }),
-                Status(GitStatusEntry { staging: StageStatus::Staged, .. }),
+                Status(GitStatusEntry { staging: StageStatus::Unstaged, .. }),
             ],
         );
     }
@@ -7217,11 +7213,9 @@ mod tests {
             &[
                 Header(GitHeaderEntry { header: Section::Unstaged }),
                 Status(GitStatusEntry { staging: StageStatus::Unstaged, .. }),
-                Header(GitHeaderEntry { header: Section::Unstaged }),
                 Status(GitStatusEntry { staging: StageStatus::Unstaged, .. }),
                 Status(GitStatusEntry { staging: StageStatus::Unstaged, .. }),
                 Status(GitStatusEntry { staging: StageStatus::Unstaged, .. }),
-                Header(GitHeaderEntry { header: Section::Unstaged }),
                 Status(GitStatusEntry { staging: StageStatus::Unstaged, .. }),
                 Status(GitStatusEntry { staging: StageStatus::Unstaged, .. }),
                 Status(GitStatusEntry { staging: StageStatus::Unstaged, .. }),
@@ -7232,19 +7226,17 @@ mod tests {
             &entries,
             &[
                 None,
+                Some("another_new.rs"),
                 Some("conflict.txt"),
-                None,
+                Some("new_file.txt"),
                 Some("src/lib.rs"),
                 Some("src/main.rs"),
-                Some("tests/test.rs"),
-                None,
-                Some("another_new.rs"),
-                Some("new_file.txt"),
                 Some("src/utils.rs"),
+                Some("tests/test.rs"),
             ],
         );
 
-        let second_status_entry = entries[3].clone();
+        let second_status_entry = entries[4].clone();
         panel.update_in(cx, |panel, window, cx| {
             panel.toggle_staged_for_entry(&second_status_entry, window, cx);
         });
@@ -7288,10 +7280,12 @@ mod tests {
         pretty_assertions::assert_matches!(
             entries.as_slice(),
             &[
+                Header(GitHeaderEntry { header: Section::Staged }),
+                Status(GitStatusEntry { status: FileStatus::Tracked(..), staging: StageStatus::Staged, .. }),
+                Header(GitHeaderEntry { header: Section::Unstaged }),
                 Status(GitStatusEntry { status: FileStatus::Untracked, staging: StageStatus::Unstaged, .. }),
                 Status(GitStatusEntry { status: FileStatus::Unmerged(..), staging: StageStatus::Unstaged, .. }),
                 Status(GitStatusEntry { status: FileStatus::Untracked, staging: StageStatus::Unstaged, .. }),
-                Status(GitStatusEntry { status: FileStatus::Tracked(..), staging: StageStatus::Staged, .. }),
                 Status(GitStatusEntry { status: FileStatus::Tracked(..), staging: StageStatus::Unstaged, .. }),
                 Status(GitStatusEntry { status: FileStatus::Untracked, staging: StageStatus::Unstaged, .. }),
                 Status(GitStatusEntry { status: FileStatus::Tracked(..), staging: StageStatus::Unstaged, .. }),
@@ -7301,23 +7295,25 @@ mod tests {
         assert_entry_paths(
             &entries,
             &[
+                None,
+                Some("src/lib.rs"),
+                None,
                 Some("another_new.rs"),
                 Some("conflict.txt"),
                 Some("new_file.txt"),
-                Some("src/lib.rs"),
                 Some("src/main.rs"),
                 Some("src/utils.rs"),
                 Some("tests/test.rs"),
             ],
         );
 
-        let third_status_entry = entries[4].clone();
+        let third_status_entry = entries[6].clone();
         panel.update_in(cx, |panel, window, cx| {
             panel.toggle_staged_for_entry(&third_status_entry, window, cx);
         });
 
         panel.update_in(cx, |panel, window, cx| {
-            panel.selected_entry = Some(9);
+            panel.selected_entry = Some(8);
             panel.stage_range(&git::StageRange, window, cx);
         });
 
@@ -7347,26 +7343,30 @@ mod tests {
         pretty_assertions::assert_matches!(
             entries.as_slice(),
             &[
+                Header(GitHeaderEntry { header: Section::Staged }),
+                Status(GitStatusEntry { status: FileStatus::Tracked(..), staging: StageStatus::Staged, .. }),
+                Status(GitStatusEntry { status: FileStatus::Tracked(..), staging: StageStatus::Staged, .. }),
+                Status(GitStatusEntry { status: FileStatus::Tracked(..), staging: StageStatus::Staged, .. }),
+                Status(GitStatusEntry { status: FileStatus::Tracked(..), staging: StageStatus::Staged, .. }),
+                Header(GitHeaderEntry { header: Section::Unstaged }),
                 Status(GitStatusEntry { status: FileStatus::Untracked, staging: StageStatus::Unstaged, .. }),
                 Status(GitStatusEntry { status: FileStatus::Unmerged(..), staging: StageStatus::Unstaged, .. }),
                 Status(GitStatusEntry { status: FileStatus::Untracked, staging: StageStatus::Unstaged, .. }),
-                Status(GitStatusEntry { status: FileStatus::Tracked(..), staging: StageStatus::Staged, .. }),
-                Status(GitStatusEntry { status: FileStatus::Tracked(..), staging: StageStatus::Staged, .. }),
-                Status(GitStatusEntry { status: FileStatus::Untracked, staging: StageStatus::Unstaged, .. }),
-                Status(GitStatusEntry { status: FileStatus::Tracked(..), staging: StageStatus::Unstaged, .. }),
             ],
         );
 
         assert_entry_paths(
             &entries,
             &[
-                Some("another_new.rs"),
-                Some("conflict.txt"),
-                Some("new_file.txt"),
+                None,
                 Some("src/lib.rs"),
                 Some("src/main.rs"),
                 Some("src/utils.rs"),
                 Some("tests/test.rs"),
+                None,
+                Some("another_new.rs"),
+                Some("conflict.txt"),
+                Some("new_file.txt"),
             ],
         );
     }
@@ -7582,7 +7582,7 @@ mod tests {
         // Confirm that `Open Diff` still works for the untracked file, updating
         // the Project Diff's active path.
         panel.update_in(cx, |panel, window, cx| {
-            panel.selected_entry = Some(1);
+            panel.selected_entry = Some(2);
             panel.open_diff(&menu::Confirm, window, cx);
         });
         cx.run_until_parked();
@@ -7837,12 +7837,14 @@ mod tests {
                 .position(|&index| index == foo_idx)
                 .expect("foo directory should be visible");
             let next_logical_idx = state.logical_indices[foo_logical_idx + 1];
-            assert!(matches!(
-                panel.entries.get(next_logical_idx),
-                Some(GitListEntry::Header(GitHeaderEntry {
-                    header: Section::Unstaged
-                }))
-            ));
+            let next_entry = panel.entries.get(next_logical_idx);
+            assert!(
+                next_entry
+                    .and_then(|e| e.status_entry())
+                    .map_or(false, |s| s.repo_path == repo_path("foobar.py")),
+                "expected foobar.py status entry after collapsed foo directory, got {:?}",
+                next_entry,
+            );
 
             foo_idx
         });
@@ -7975,16 +7977,14 @@ mod tests {
 
         let entries = panel.read_with(cx, |panel, _| panel.entries.clone());
 
-        // GitPanel
-        // - Tracked:
+        // GitPanel (Unstaged section, sorted by path):
         // - [] tracked
-        // - Untracked
         // - [] untracked
         //
-        // The commit message should now read:
-        // "Update tracked"
+        // With 2 unstaged files and nothing staged, no single-file
+        // suggestion is possible.
         let message = panel.update(cx, |panel, cx| panel.suggest_commit_message(cx));
-        assert_eq!(message, Some("Update tracked".to_string()));
+        assert!(message.is_none());
 
         let first_status_entry = entries[1].clone();
         panel.update_in(cx, |panel, window, cx| {
@@ -8012,18 +8012,15 @@ mod tests {
         cx.executor().advance_clock(2 * UPDATE_DEBOUNCE);
         handle.await;
 
-        // GitPanel
-        // - Tracked:
-        // - [x] tracked
-        // - Untracked
-        // - [] untracked
+        // GitPanel:
+        // - Staged: [x] tracked
+        // - Unstaged: [] untracked
         //
-        // The commit message should still read:
-        // "Update tracked"
+        // With exactly 1 staged file, the suggestion is based on that file.
         let message = panel.update(cx, |panel, cx| panel.suggest_commit_message(cx));
         assert_eq!(message, Some("Update tracked".to_string()));
 
-        let second_status_entry = entries[3].clone();
+        let second_status_entry = entries[2].clone();
         panel.update_in(cx, |panel, window, cx| {
             panel.toggle_staged_for_entry(&second_status_entry, window, cx);
         });
@@ -8049,15 +8046,10 @@ mod tests {
         cx.executor().advance_clock(2 * UPDATE_DEBOUNCE);
         handle.await;
 
-        // GitPanel
-        // - Tracked:
-        // - [x] tracked
-        // - Untracked
-        // - [x] untracked
+        // GitPanel:
+        // - Staged: [x] tracked, [x] untracked
         //
-        // The commit message should now read:
-        // "Enter commit message"
-        // (which means we should see None returned).
+        // With 2 staged files, no single-file suggestion is possible.
         let message = panel.update(cx, |panel, cx| panel.suggest_commit_message(cx));
         assert!(message.is_none());
 
@@ -8086,14 +8078,11 @@ mod tests {
         cx.executor().advance_clock(2 * UPDATE_DEBOUNCE);
         handle.await;
 
-        // GitPanel
-        // - Tracked:
-        // - [] tracked
-        // - Untracked
-        // - [x] untracked
+        // GitPanel:
+        // - Staged: [x] untracked
+        // - Unstaged: [] tracked
         //
-        // The commit message should now read:
-        // "Update untracked"
+        // With exactly 1 staged file, the suggestion is based on that file.
         let message = panel.update(cx, |panel, cx| panel.suggest_commit_message(cx));
         assert_eq!(message, Some("Create untracked".to_string()));
 
@@ -8122,16 +8111,13 @@ mod tests {
         cx.executor().advance_clock(2 * UPDATE_DEBOUNCE);
         handle.await;
 
-        // GitPanel
-        // - Tracked:
+        // GitPanel (Unstaged section):
         // - [] tracked
-        // - Untracked
         // - [] untracked
         //
-        // The commit message should now read:
-        // "Update tracked"
+        // Back to initial state: 2 unstaged files, no suggestion.
         let message = panel.update(cx, |panel, cx| panel.suggest_commit_message(cx));
-        assert_eq!(message, Some("Update tracked".to_string()));
+        assert!(message.is_none());
     }
 
     #[gpui::test]
