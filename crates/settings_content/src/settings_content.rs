@@ -600,6 +600,12 @@ pub struct GitPanelSettingsContent {
     ///
     /// Default: false
     pub starts_open: Option<bool>,
+
+    /// Whether clicking a file in the git panel opens a single-file diff
+    /// instead of the shared multi-buffer diff view.
+    ///
+    /// Default: false
+    pub single_file_diff: Option<bool>,
 }
 
 #[derive(

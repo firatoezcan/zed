@@ -925,6 +925,11 @@
     //
     // Default: true
     "diff_stats": true,
+    // Whether clicking a file in the git panel opens a single-file diff
+    // instead of the shared multi-buffer diff view.
+    //
+    // Default: false
+    "single_file_diff": false,
   },
   "message_editor": {
     // Whether to automatically replace emoji shortcodes with emoji characters.
