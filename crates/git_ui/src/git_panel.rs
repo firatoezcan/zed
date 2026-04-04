@@ -661,6 +661,7 @@ pub struct GitPanel {
     stash_entries: GitStash,
 
     _settings_subscription: Subscription,
+    _periodic_fetch_task: Task<()>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -847,8 +848,10 @@ impl GitPanel {
                 bulk_staging: None,
                 stash_entries: Default::default(),
                 _settings_subscription,
+                _periodic_fetch_task: Task::ready(()),
             };
 
+            this.start_periodic_fetch(cx);
             this.schedule_update(window, cx);
             this
         })
@@ -3003,6 +3006,39 @@ impl GitPanel {
                 .await?;
             remotes.get(selection).cloned()
         })
+    }
+
+    fn start_periodic_fetch(&mut self, cx: &mut Context<Self>) {
+        let interval_secs = GitPanelSettings::get_global(cx).auto_fetch_interval;
+        if interval_secs == 0 {
+            return;
+        }
+
+        let interval = Duration::from_secs(interval_secs);
+        let weak_this = cx.weak_entity();
+        self._periodic_fetch_task = cx.spawn(async move |_, cx| {
+            loop {
+                cx.background_executor().timer(interval).await;
+                let noop_askpass = AskPassDelegate::new(cx, |_prompt, _tx, _cx| {
+                    // Silently drop the sender - auto-fetch doesn't prompt for credentials
+                });
+                let result = weak_this.update(cx, |this, cx| {
+                    let Some(repo) = this.active_repository.clone() else {
+                        return;
+                    };
+                    let fetch = repo.update(cx, |repo, cx| {
+                        repo.fetch(FetchOptions::All, noop_askpass, cx)
+                    });
+                    cx.background_spawn(async move {
+                        fetch.await.ok();
+                    })
+                    .detach();
+                });
+                if result.is_err() {
+                    break;
+                }
+            }
+        });
     }
 
     pub(crate) fn fetch(

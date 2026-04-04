@@ -606,6 +606,11 @@ pub struct GitPanelSettingsContent {
     ///
     /// Default: false
     pub single_file_diff: Option<bool>,
+
+    /// Interval in seconds for automatic git fetch. Set to 0 to disable.
+    ///
+    /// Default: 0
+    pub auto_fetch_interval: Option<u64>,
 }
 
 #[derive(

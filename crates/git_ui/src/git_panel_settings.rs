@@ -31,6 +31,7 @@ pub struct GitPanelSettings {
     pub show_count_badge: bool,
     pub starts_open: bool,
     pub single_file_diff: bool,
+    pub auto_fetch_interval: u64,
 }
 
 #[derive(Default)]
@@ -78,6 +79,7 @@ impl Settings for GitPanelSettings {
             show_count_badge: git_panel.show_count_badge.unwrap(),
             starts_open: git_panel.starts_open.unwrap(),
             single_file_diff: git_panel.single_file_diff.unwrap(),
+            auto_fetch_interval: git_panel.auto_fetch_interval.unwrap(),
         }
     }
 }

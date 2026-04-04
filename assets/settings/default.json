@@ -930,6 +930,10 @@
     //
     // Default: false
     "single_file_diff": false,
+    // Interval in seconds for automatic git fetch. Set to 0 to disable.
+    //
+    // Default: 0
+    "auto_fetch_interval": 0,
   },
   "message_editor": {
     // Whether to automatically replace emoji shortcodes with emoji characters.
