@@ -611,6 +611,12 @@ pub struct GitPanelSettingsContent {
     ///
     /// Default: 0
     pub auto_fetch_interval: Option<u64>,
+
+    /// Maximum number of files to load at once in the shared buffer diff view.
+    /// Set to 0 to load all files. When set, a "Load more" button appears.
+    ///
+    /// Default: 0
+    pub diff_page_size: Option<usize>,
 }
 
 #[derive(

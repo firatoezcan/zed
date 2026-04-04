@@ -76,6 +76,8 @@ pub struct ProjectDiff {
     focus_handle: FocusHandle,
     pending_scroll: Option<PathKey>,
     review_comment_count: usize,
+    loaded_file_count: usize,
+    total_file_count: usize,
     _task: Task<Result<()>>,
     _subscription: Subscription,
 }
@@ -446,6 +448,8 @@ impl ProjectDiff {
             buffer_diff_subscriptions: Default::default(),
             pending_scroll: None,
             review_comment_count: 0,
+            loaded_file_count: 0,
+            total_file_count: 0,
             _task: task,
             _subscription: Subscription::join(
                 branch_diff_subscription,
@@ -790,6 +794,16 @@ impl ProjectDiff {
                 .map(|(_, path_key)| path_key.clone())
                 .collect::<HashSet<_>>();
 
+            this.total_file_count = buffers_to_load.len();
+
+            let page_size = GitPanelSettings::get_global(cx).diff_page_size;
+            let buffers_to_load = if page_size > 0 {
+                let limit = this.loaded_file_count + page_size;
+                buffers_to_load.into_iter().take(limit).collect::<Vec<_>>()
+            } else {
+                buffers_to_load
+            };
+
             if let Some(repo) = repo {
                 let repo = repo.read(cx);
 
@@ -825,12 +839,14 @@ impl ProjectDiff {
         })?;
 
         let mut buffers_to_fold = Vec::new();
+        let mut loaded_count = 0;
 
         for (entry, path_key) in buffers_to_load.into_iter().zip(path_keys.into_iter()) {
             if let Some((buffer, diff)) = entry.load.await.log_err() {
                 // We might be lagging behind enough that all future entry.load futures are no longer pending.
                 // If that is the case, this task will never yield, starving the foreground thread of execution time.
                 yield_now().await;
+                loaded_count += 1;
                 cx.update(|window, cx| {
                     this.update(cx, |this, cx| {
                         let multibuffer = this.multibuffer.read(cx);
@@ -862,6 +878,7 @@ impl ProjectDiff {
             }
         }
         this.update(cx, |this, cx| {
+            this.loaded_file_count = loaded_count;
             if !buffers_to_fold.is_empty() {
                 this.editor.update(cx, |editor, cx| {
                     editor
