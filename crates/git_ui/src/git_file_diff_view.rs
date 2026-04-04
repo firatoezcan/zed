@@ -2,6 +2,7 @@
 //!
 //! Shows a single file's diff in a dedicated tab using SplittableEditor.
 //! Left side: HEAD content (read-only). Right side: working copy.
+//! Has a "Previous Commit" button to navigate through file history.
 
 use anyhow::Result;
 use buffer_diff::BufferDiff;
@@ -9,16 +10,20 @@ use editor::{Editor, EditorEvent, EditorSettings, SplittableEditor};
 use git::repository::RepoPath;
 use gpui::{
     AnyElement, App, AppContext as _, Entity, EventEmitter, FocusHandle, Focusable, IntoElement,
-    Render, SharedString, Subscription, Task, WeakEntity, Window,
+    ParentElement as _, Render, SharedString, Styled as _, Subscription, Task, WeakEntity, Window,
+    div, px,
 };
 use language::Buffer;
 use multi_buffer::MultiBuffer;
 use project::ProjectPath;
-use project::git_store::Repository;
+use project::git_store::{GitStore, Repository};
 use settings::Settings;
 use std::any::{Any, TypeId};
 use std::sync::Arc;
-use ui::{Color, Icon, IconName, Label, LabelCommon as _};
+use ui::{
+    ActiveTheme as _, Button, ButtonCommon as _, Clickable as _, Color, Icon, IconName, Label,
+    LabelCommon as _, LabelSize, Tooltip, v_flex,
+};
 use workspace::{
     Item, ItemHandle as _, ItemNavHistory, Workspace,
     item::{ItemEvent, TabContentParams},
@@ -27,9 +32,12 @@ use workspace::{
 
 pub struct GitFileDiffView {
     repo_path: RepoPath,
+    repository: WeakEntity<Repository>,
+    git_store: WeakEntity<GitStore>,
+    workspace: WeakEntity<Workspace>,
+
     editor: Entity<SplittableEditor>,
-    _new_buffer: Entity<Buffer>,
-    _diff: Entity<BufferDiff>,
+
     _focus_handle: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
@@ -66,12 +74,16 @@ impl GitFileDiffView {
                 })
                 .await?;
 
+            let repository_weak = repository.downgrade();
+            let git_store_weak = git_store.downgrade();
             workspace_entity.update_in(cx, |workspace, window, cx| {
                 let diff_view = cx.new(|cx| {
                     Self::new(
                         repo_path,
                         new_buffer,
                         diff,
+                        repository_weak,
+                        git_store_weak,
                         workspace,
                         window,
                         cx,
@@ -90,17 +102,19 @@ impl GitFileDiffView {
         repo_path: RepoPath,
         new_buffer: Entity<Buffer>,
         diff: Entity<BufferDiff>,
+        repository: WeakEntity<Repository>,
+        git_store: WeakEntity<GitStore>,
         workspace: &Workspace,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Self {
         let focus_handle = cx.focus_handle();
-        let project = workspace.project().clone();
-        let workspace_entity = cx.entity().downgrade();
+        let workspace_weak = workspace.weak_handle();
         let workspace_handle = workspace
             .weak_handle()
             .upgrade()
-            .expect("workspace should be valid at this point");
+            .expect("workspace should be valid");
+        let project = workspace.project().clone();
 
         let multibuffer = cx.new(|cx| {
             let mut multibuffer = MultiBuffer::singleton(new_buffer.clone(), cx);
@@ -113,7 +127,7 @@ impl GitFileDiffView {
             let splittable_editor = SplittableEditor::new(
                 EditorSettings::get_global(cx).diff_view_style,
                 multibuffer.clone(),
-                project.clone(),
+                project,
                 workspace_handle,
                 window,
                 cx,
@@ -130,16 +144,76 @@ impl GitFileDiffView {
             cx.emit(event.clone());
         });
 
-        let _ = workspace_entity;
+        let _ = new_buffer;
+        let _ = diff;
 
         Self {
             repo_path,
+            repository,
+            git_store,
+            workspace: workspace_weak,
             editor,
-            _new_buffer: new_buffer,
-            _diff: diff,
             _focus_handle: focus_handle,
             _subscriptions: vec![editor_subscription],
         }
+    }
+
+    /// Open the file history view for this file.
+    fn view_file_history(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
+        crate::file_history_view::FileHistoryView::open(
+            self.repo_path.clone(),
+            self.git_store.clone(),
+            self.repository.clone(),
+            self.workspace.clone(),
+            window,
+            cx,
+        );
+    }
+
+    /// Navigate to the previous commit of this file by opening a CommitView
+    /// for the most recent commit of this file, filtered to show only this file's changes.
+    fn view_last_commit(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
+        let repository = self.repository.clone();
+        let workspace = self.workspace.clone();
+        let git_store = self.git_store.clone();
+        let repo_path = self.repo_path.clone();
+
+        let load_task: Option<Task<Result<git::repository::FileHistory>>> =
+            match git_store.upgrade() {
+                Some(gs) => gs.update(cx, |git_store, cx| {
+                    let repo = repository.upgrade()?;
+                    let task = git_store
+                        .file_history_paginated(&repo, repo_path.clone(), 0, Some(1), cx);
+                    Some(task)
+                }),
+                None => None,
+            };
+
+        let Some(load_task) = load_task else {
+            return;
+        };
+
+        cx.spawn_in(window, async move |_, cx| {
+            let history = load_task.await?;
+            let Some(first_entry) = history.entries.first() else {
+                return Ok(());
+            };
+            let commit_sha = first_entry.sha.to_string();
+
+            cx.update(|window, cx| {
+                crate::commit_view::CommitView::open(
+                    commit_sha,
+                    repository,
+                    workspace,
+                    None,
+                    Some(repo_path),
+                    window,
+                    cx,
+                );
+            })?;
+            anyhow::Ok(())
+        })
+        .detach();
     }
 
     fn display_title(&self) -> SharedString {
@@ -255,7 +329,49 @@ impl Item for GitFileDiffView {
 }
 
 impl Render for GitFileDiffView {
-    fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
-        self.editor.clone()
+    fn render(&mut self, _: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        v_flex()
+            .size_full()
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_2()
+                    .px_3()
+                    .py_1()
+                    .h(px(36.))
+                    .flex_none()
+                    .border_b_1()
+                    .border_color(cx.theme().colors().border)
+                    .bg(cx.theme().colors().editor_background)
+                    .child(
+                        Button::new("last-commit-btn", "← Last Commit")
+                            .tooltip(|_, cx| {
+                                Tooltip::simple(
+                                    "View the last commit's changes for this file",
+                                    cx,
+                                )
+                            })
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.view_last_commit(window, cx);
+                            })),
+                    )
+                    .child(
+                        Button::new("file-history-btn", "All History")
+                            .tooltip(|_, cx| {
+                                Tooltip::simple("View the full commit history of this file", cx)
+                            })
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.view_file_history(window, cx);
+                            })),
+                    )
+                    .child(
+                        Label::new(self.display_title())
+                            .size(LabelSize::Small)
+                            .color(Color::Muted),
+                    ),
+            )
+            .child(self.editor.clone())
     }
 }
