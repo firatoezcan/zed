@@ -1361,48 +1361,23 @@ impl GitPanel {
                 return None;
             }
 
-            let open_task = self
-                .workspace
-                .update(cx, |workspace, cx| {
-                    workspace.open_path_preview(path, None, false, false, true, window, cx)
-                })
-                .ok()?;
-
+            let repo_path = entry.repo_path.clone();
+            let repository = active_repo.clone();
             let workspace = self.workspace.clone();
+
+            let open_task = crate::git_file_diff_view::GitFileDiffView::open(
+                path,
+                repo_path,
+                repository,
+                workspace.clone(),
+                window,
+                cx,
+            );
+
             cx.spawn_in(window, async move |_, mut cx| {
-                let item = open_task
+                open_task
                     .await
-                    .notify_workspace_async_err(workspace, &mut cx)
-                    .ok_or_else(|| anyhow::anyhow!("Failed to open file"))?;
-                if let Some(active_editor) = item.downcast::<Editor>() {
-                    if let Some(diff_task) =
-                        active_editor.update(cx, |editor, _cx| editor.wait_for_diff_to_load())
-                    {
-                        diff_task.await;
-                    }
-
-                    cx.update(|window, cx| {
-                        active_editor.update(cx, |editor, cx| {
-                            editor.expand_all_diff_hunks(
-                                &editor::actions::ExpandAllDiffHunks,
-                                window,
-                                cx,
-                            );
-
-                            let snapshot = editor.snapshot(window, cx);
-                            editor.go_to_hunk_before_or_after_position(
-                                &snapshot,
-                                language::Point::new(0, 0),
-                                editor::Direction::Next,
-                                true,
-                                window,
-                                cx,
-                            );
-                        })
-                    })
-                    .log_err();
-                }
-
+                    .notify_workspace_async_err(workspace, &mut cx);
                 anyhow::Ok(())
             })
             .detach();
