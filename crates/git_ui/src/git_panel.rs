@@ -1294,7 +1294,24 @@ impl GitPanel {
         }
     }
 
+    fn section_for_selected_entry(&self) -> Option<Section> {
+        let selected = self.selected_entry?;
+        // Walk backwards from the selected entry to find the most recent Header
+        for idx in (0..=selected).rev() {
+            if let Some(GitListEntry::Header(header)) = self.entries.get(idx) {
+                return Some(header.header);
+            }
+        }
+        None
+    }
+
     fn open_project_diff(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let hunk_filter = match self.section_for_selected_entry() {
+            Some(Section::Staged) => project_diff::HunkFilter::StagedOnly,
+            Some(Section::Unstaged) => project_diff::HunkFilter::UnstagedOnly,
+            None => project_diff::HunkFilter::All,
+        };
+
         maybe!({
             let entry = self.entries.get(self.selected_entry?)?.status_entry()?;
             let workspace = self.workspace.upgrade()?;
@@ -1308,6 +1325,9 @@ impl GitPanel {
                         .project_path_to_repo_path(&project_path, cx)
                         .as_ref()
             {
+                project_diff.update(cx, |project_diff, cx| {
+                    project_diff.set_hunk_filter(hunk_filter, window, cx);
+                });
                 project_diff.focus_handle(cx).focus(window, cx);
                 project_diff.update(cx, |project_diff, cx| project_diff.autoscroll(cx));
                 return None;
@@ -1315,7 +1335,13 @@ impl GitPanel {
 
             self.workspace
                 .update(cx, |workspace, cx| {
-                    ProjectDiff::deploy_at(workspace, Some(entry.clone()), window, cx);
+                    ProjectDiff::deploy_at_with_filter(
+                        workspace,
+                        Some(entry.clone()),
+                        hunk_filter,
+                        window,
+                        cx,
+                    );
                 })
                 .ok();
             self.focus_handle.focus(window, cx);
