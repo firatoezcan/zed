@@ -9,5 +9,7 @@ Or clone the repo and ask Claude/Codex/AI assistant of your choice to build it f
 ## Changes
 - Adding separate Staged/Unstaged areas inside the Git panel, viewing the diff for a single file when clicked instead of buffer and looking at previous changes to a file with arrow buttons: https://github.com/firatoezcan/zed/pull/1
 
+> [!CAUTION]
+> This is slow because it was a debug build!! It's not actually that slow otherwise I wouldnt use it myself lol
 
 https://github.com/user-attachments/assets/d6c52cb9-b933-4061-8691-6786a2ffca00
