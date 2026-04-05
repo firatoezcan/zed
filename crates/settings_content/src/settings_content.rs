@@ -600,6 +600,23 @@ pub struct GitPanelSettingsContent {
     ///
     /// Default: false
     pub starts_open: Option<bool>,
+
+    /// Whether clicking a file in the git panel opens a single-file diff
+    /// instead of the shared multi-buffer diff view.
+    ///
+    /// Default: false
+    pub single_file_diff: Option<bool>,
+
+    /// Interval in seconds for automatic git fetch. Set to 0 to disable.
+    ///
+    /// Default: 0
+    pub auto_fetch_interval: Option<u64>,
+
+    /// Maximum number of files to load at once in the shared buffer diff view.
+    /// Set to 0 to load all files. When set, a "Load more" button appears.
+    ///
+    /// Default: 0
+    pub diff_page_size: Option<usize>,
 }
 
 #[derive(

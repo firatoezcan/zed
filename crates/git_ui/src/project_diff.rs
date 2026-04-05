@@ -76,6 +76,9 @@ pub struct ProjectDiff {
     focus_handle: FocusHandle,
     pending_scroll: Option<PathKey>,
     review_comment_count: usize,
+    loaded_file_count: usize,
+    total_file_count: usize,
+    hunk_filter: HunkFilter,
     _task: Task<Result<()>>,
     _subscription: Subscription,
 }
@@ -85,6 +88,18 @@ pub enum RefreshReason {
     DiffChanged,
     StatusesChanged,
     EditorSaved,
+}
+
+/// Controls which diff hunks to show in the ProjectDiff view.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum HunkFilter {
+    /// Show all hunks (both staged and unstaged)
+    #[default]
+    All,
+    /// Only show hunks that are staged (in index but not in HEAD)
+    StagedOnly,
+    /// Only show hunks that are unstaged (in working tree but not in index)
+    UnstagedOnly,
 }
 
 const CONFLICT_SORT_PREFIX: u64 = 1;
@@ -252,6 +267,106 @@ impl ProjectDiff {
                 project_diff.move_to_entry(entry, window, cx);
             })
         }
+    }
+
+    pub fn deploy_at_with_filter(
+        workspace: &mut Workspace,
+        entry: Option<GitStatusEntry>,
+        hunk_filter: HunkFilter,
+        window: &mut Window,
+        cx: &mut Context<Workspace>,
+    ) {
+        telemetry::event!(
+            "Git Diff Opened",
+            source = if entry.is_some() {
+                "Git Panel"
+            } else {
+                "Action"
+            }
+        );
+        let intended_repo = resolve_active_repository(workspace, cx);
+
+        let existing = workspace
+            .items_of_type::<Self>(cx)
+            .find(|item| matches!(item.read(cx).diff_base(cx), DiffBase::Head));
+        let project_diff = if let Some(existing) = existing {
+            existing.update(cx, |project_diff, cx| {
+                project_diff.move_to_beginning(window, cx);
+            });
+
+            workspace.activate_item(&existing, true, true, window, cx);
+            existing
+        } else {
+            let workspace_handle = cx.entity();
+            let project_diff =
+                cx.new(|cx| Self::new(workspace.project().clone(), workspace_handle, window, cx));
+            workspace.add_item_to_active_pane(
+                Box::new(project_diff.clone()),
+                None,
+                true,
+                window,
+                cx,
+            );
+            project_diff
+        };
+
+        if let Some(intended) = &intended_repo {
+            let needs_switch = project_diff
+                .read(cx)
+                .branch_diff
+                .read(cx)
+                .repo()
+                .map_or(true, |current| current.read(cx).id != intended.read(cx).id);
+            if needs_switch {
+                project_diff.update(cx, |project_diff, cx| {
+                    project_diff.branch_diff.update(cx, |branch_diff, cx| {
+                        branch_diff.set_repo(Some(intended.clone()), cx);
+                    });
+                });
+            }
+        }
+
+        project_diff.update(cx, |project_diff, cx| {
+            project_diff.set_hunk_filter(hunk_filter, window, cx);
+        });
+
+        if let Some(entry) = entry {
+            project_diff.update(cx, |project_diff, cx| {
+                project_diff.move_to_entry(entry, window, cx);
+            })
+        }
+    }
+
+    pub fn set_hunk_filter(
+        &mut self,
+        filter: HunkFilter,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.hunk_filter == filter {
+            return;
+        }
+        self.hunk_filter = filter;
+        // Clear all existing excerpts to force re-registration with new filter
+        let existing_paths: Vec<PathKey> = self
+            .multibuffer
+            .read(cx)
+            .snapshot(cx)
+            .buffers_with_paths()
+            .map(|(_, path_key)| path_key.clone())
+            .collect();
+
+        self.editor.update(cx, |editor, cx| {
+            for path in existing_paths {
+                self.buffer_diff_subscriptions.remove(&path.path);
+                editor.remove_excerpts_for_path(path, cx);
+            }
+        });
+
+        self._task = window.spawn(cx, {
+            let this = cx.weak_entity();
+            async |cx| Self::refresh(this, RefreshReason::StatusesChanged, cx).await
+        });
     }
 
     pub fn deploy_at_project_path(
@@ -446,6 +561,9 @@ impl ProjectDiff {
             buffer_diff_subscriptions: Default::default(),
             pending_scroll: None,
             review_comment_count: 0,
+            loaded_file_count: 0,
+            total_file_count: 0,
+            hunk_filter: HunkFilter::default(),
             _task: task,
             _subscription: Subscription::join(
                 branch_diff_subscription,
@@ -688,12 +806,28 @@ impl ProjectDiff {
         let snapshot = buffer.read(cx).snapshot();
         let diff_snapshot = diff.read(cx).snapshot(cx);
 
+        let hunk_filter = self.hunk_filter;
         let excerpt_ranges = {
             let diff_hunk_ranges = diff_snapshot
                 .hunks_intersecting_range(
                     Anchor::min_max_range_for_buffer(snapshot.remote_id()),
                     &snapshot,
                 )
+                .filter(move |diff_hunk| match hunk_filter {
+                    HunkFilter::All => true,
+                    HunkFilter::StagedOnly => matches!(
+                        diff_hunk.secondary_status,
+                        DiffHunkSecondaryStatus::NoSecondaryHunk
+                            | DiffHunkSecondaryStatus::OverlapsWithSecondaryHunk
+                            | DiffHunkSecondaryStatus::SecondaryHunkAdditionPending
+                    ),
+                    HunkFilter::UnstagedOnly => matches!(
+                        diff_hunk.secondary_status,
+                        DiffHunkSecondaryStatus::HasSecondaryHunk
+                            | DiffHunkSecondaryStatus::OverlapsWithSecondaryHunk
+                            | DiffHunkSecondaryStatus::SecondaryHunkRemovalPending
+                    ),
+                })
                 .map(|diff_hunk| diff_hunk.buffer_range.to_point(&snapshot));
             let conflicts = conflict_addon
                 .conflict_set(snapshot.remote_id())
@@ -790,6 +924,16 @@ impl ProjectDiff {
                 .map(|(_, path_key)| path_key.clone())
                 .collect::<HashSet<_>>();
 
+            this.total_file_count = buffers_to_load.len();
+
+            let page_size = GitPanelSettings::get_global(cx).diff_page_size;
+            let buffers_to_load = if page_size > 0 {
+                let limit = this.loaded_file_count + page_size;
+                buffers_to_load.into_iter().take(limit).collect::<Vec<_>>()
+            } else {
+                buffers_to_load
+            };
+
             if let Some(repo) = repo {
                 let repo = repo.read(cx);
 
@@ -825,12 +969,14 @@ impl ProjectDiff {
         })?;
 
         let mut buffers_to_fold = Vec::new();
+        let mut loaded_count = 0;
 
         for (entry, path_key) in buffers_to_load.into_iter().zip(path_keys.into_iter()) {
             if let Some((buffer, diff)) = entry.load.await.log_err() {
                 // We might be lagging behind enough that all future entry.load futures are no longer pending.
                 // If that is the case, this task will never yield, starving the foreground thread of execution time.
                 yield_now().await;
+                loaded_count += 1;
                 cx.update(|window, cx| {
                     this.update(cx, |this, cx| {
                         let multibuffer = this.multibuffer.read(cx);
@@ -862,6 +1008,7 @@ impl ProjectDiff {
             }
         }
         this.update(cx, |this, cx| {
+            this.loaded_file_count = loaded_count;
             if !buffers_to_fold.is_empty() {
                 this.editor.update(cx, |editor, cx| {
                     editor
