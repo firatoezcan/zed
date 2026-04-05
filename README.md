@@ -19,7 +19,7 @@ Other platforms are not yet available:
 
 - [Building Zed for macOS](./docs/src/development/macos.md)
 - [Building Zed for Linux](./docs/src/development/linux.md)
-- [Building Zed for Windows](./docs/src/development/windows.md)
+- [Building Zed for Windows](./docs/src/development/windows.md)aa
 
 ### Contributing
 

@@ -457,38 +457,96 @@ impl Render for GitFileDiffView {
     }
 }
 
-/// Toolbar that activates for `GitFileDiffView` and provides quick access
-/// to the last commit touching this file (opens a filtered `CommitView`).
+/// Toolbar that provides quick access to "last commit that touched this
+/// file". Activates for `GitFileDiffView` tabs *and* for any regular
+/// `Editor` tab whose buffer corresponds to a file in a git repository.
 pub struct GitFileDiffViewToolbar {
-    view: Option<WeakEntity<GitFileDiffView>>,
+    target: ToolbarTarget,
+    workspace: WeakEntity<Workspace>,
+}
+
+enum ToolbarTarget {
+    None,
+    DiffView(WeakEntity<GitFileDiffView>),
+    File(ProjectPath),
 }
 
 impl GitFileDiffViewToolbar {
-    pub fn new() -> Self {
-        Self { view: None }
+    pub fn new(workspace: &Workspace, _: &mut gpui::Context<Self>) -> Self {
+        Self {
+            target: ToolbarTarget::None,
+            workspace: workspace.weak_handle(),
+        }
     }
-}
 
-impl Default for GitFileDiffViewToolbar {
-    fn default() -> Self {
-        Self::new()
+    fn open_last_commit_for_file(
+        &self,
+        project_path: ProjectPath,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let Some(workspace) = self.workspace.upgrade() else {
+            return;
+        };
+        let project = workspace.read(cx).project().clone();
+        let git_store = project.read(cx).git_store().clone();
+        let Some((repo, repo_path)) = git_store
+            .read(cx)
+            .repository_and_path_for_project_path(&project_path, cx)
+        else {
+            return;
+        };
+        let load_task = git_store.update(cx, |git_store, cx| {
+            git_store.file_history_paginated(&repo, repo_path.clone(), 0, Some(1), cx)
+        });
+        let repository_weak = repo.downgrade();
+        let workspace_weak = self.workspace.clone();
+        window
+            .spawn(cx, async move |cx| {
+                let history = load_task.await?;
+                let Some(first_entry) = history.entries.first() else {
+                    return anyhow::Ok(());
+                };
+                let commit_sha = first_entry.sha.to_string();
+                cx.update(|window, cx| {
+                    crate::commit_view::CommitView::open(
+                        commit_sha,
+                        repository_weak,
+                        workspace_weak,
+                        None,
+                        Some(repo_path),
+                        window,
+                        cx,
+                    );
+                })?;
+                anyhow::Ok(())
+            })
+            .detach();
     }
 }
 
 impl EventEmitter<ToolbarItemEvent> for GitFileDiffViewToolbar {}
 
 impl Render for GitFileDiffViewToolbar {
-    fn render(&mut self, _window: &mut Window, _cx: &mut gpui::Context<Self>) -> impl IntoElement {
-        let Some(view) = self.view.as_ref().and_then(|w| w.upgrade()) else {
+    fn render(&mut self, _window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        if matches!(self.target, ToolbarTarget::None) {
             return h_flex();
-        };
+        }
         h_flex().gap_1().child(
             IconButton::new("view-last-commit", IconName::HistoryRerun)
                 .icon_size(IconSize::Small)
                 .tooltip(Tooltip::text("View the last commit that touched this file"))
-                .on_click(move |_, window, cx| {
-                    view.update(cx, |view, cx| view.view_last_commit(window, cx));
-                }),
+                .on_click(cx.listener(|this, _, window, cx| match &this.target {
+                    ToolbarTarget::DiffView(view) => {
+                        if let Some(view) = view.upgrade() {
+                            view.update(cx, |view, cx| view.view_last_commit(window, cx));
+                        }
+                    }
+                    ToolbarTarget::File(project_path) => {
+                        this.open_last_commit_for_file(project_path.clone(), window, cx);
+                    }
+                    ToolbarTarget::None => {}
+                })),
         )
     }
 }
@@ -500,11 +558,31 @@ impl ToolbarItemView for GitFileDiffViewToolbar {
         _: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> ToolbarItemLocation {
-        if let Some(entity) = active_pane_item.and_then(|i| i.act_as::<GitFileDiffView>(cx)) {
-            self.view = Some(entity.downgrade());
+        self.target = ToolbarTarget::None;
+        let Some(item) = active_pane_item else {
+            return ToolbarItemLocation::Hidden;
+        };
+        if let Some(entity) = item.act_as::<GitFileDiffView>(cx) {
+            self.target = ToolbarTarget::DiffView(entity.downgrade());
             return ToolbarItemLocation::PrimaryRight;
         }
-        self.view = None;
+        // For regular Editor tabs (and anything else backed by a file),
+        // only show the button when the file actually lives in a git
+        // repository inside the project.
+        if let Some(project_path) = item.project_path(cx)
+            && let Some(workspace) = self.workspace.upgrade()
+        {
+            let project = workspace.read(cx).project().clone();
+            let git_store = project.read(cx).git_store();
+            if git_store
+                .read(cx)
+                .repository_and_path_for_project_path(&project_path, cx)
+                .is_some()
+            {
+                self.target = ToolbarTarget::File(project_path);
+                return ToolbarItemLocation::PrimaryRight;
+            }
+        }
         ToolbarItemLocation::Hidden
     }
 

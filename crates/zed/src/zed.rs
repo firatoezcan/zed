@@ -1239,7 +1239,8 @@ fn initialize_pane(
             toolbar.add_item(branch_diff_toolbar, window, cx);
             let commit_view_toolbar = cx.new(|_| CommitViewToolbar::new());
             toolbar.add_item(commit_view_toolbar, window, cx);
-            let git_file_diff_view_toolbar = cx.new(|_| GitFileDiffViewToolbar::new());
+            let git_file_diff_view_toolbar =
+                cx.new(|cx| GitFileDiffViewToolbar::new(workspace, cx));
             toolbar.add_item(git_file_diff_view_toolbar, window, cx);
             let agent_diff_toolbar = cx.new(AgentDiffToolbar::new);
             toolbar.add_item(agent_diff_toolbar, window, cx);
