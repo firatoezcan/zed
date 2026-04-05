@@ -160,3 +160,45 @@ was pre-existing but blocked `./script/clippy`, so it had to go.
 - `crates/project/src/git_store.rs` (new `head_and_index_text` on
   Repository)
 - `crates/zed/src/zed.rs` (register GitFileDiffViewToolbar)
+
+- **Run 4 (keep)**: GUI verification loop via xdotool + ImageMagick
+  surfaced two bugs in the preview-tab integration:
+
+  1. `add_item` followed by `replace_preview_item_id` left
+     `active_item_index` dangling one past the end (because
+     `close_current_preview_item` restores the active index verbatim
+     after removing an item at a lower index). Fix: close the existing
+     preview first, then add at the returned slot.
+
+  2. `BufferRangesUpdated` events from the multibuffer's diff-hunk
+     loading emitted `ItemEvent::Edit`, which `handle_item_edit`
+     consumed to un-preview the tab (the default `preserve_preview`
+     returns `false`). Fix: override `preserve_preview` to `true` on
+     `GitFileDiffView` — it is not user-editable.
+
+  Also dropped a redundant `replace_preview_item_id` in the dedup
+  branch of `open()` that was closing the item we just activated.
+
+  ASI: xdotool's `--window <id>` flag does NOT deliver click events
+  to gpui's X11 input loop. Use GLOBAL screen coordinates
+  (`xdotool mousemove X Y; xdotool click 1`) instead. Same for key
+  modifiers — `keydown alt; click; keyup alt` is intercepted by the
+  window manager (alt-drag). Ctrl/Cmd modifiers work through
+  `keydown ctrl`.
+
+### Verification shots
+
+7-shot canonical flow under `verify/shots/`:
+
+```
+00_launched          — zed with /tmp/zed-verify-repo
+01_git_panel         — Ctrl+Shift+G opens panel (3 files, staged+unstaged)
+02_staged_click      — 'README.md (Index ↔ HEAD)'
+03_unstaged_click    — 'README.md (Working ↔ Index)' replaces 02's tab
+04_dedup             — 3x click on unstaged → still 1 tab
+05_ctrl_click        — Ctrl+Click on greet.py → plain 'greet.py' tab
+06_last_commit       — toolbar button → 'fcf2bdd — Add farewell'
+07_older_commit      — ← arrow → 'd4afc64 — Initial commit'
+```
+
+Repro: `bash verify/git_test_setup.sh && bash verify/verify_ui.sh`
