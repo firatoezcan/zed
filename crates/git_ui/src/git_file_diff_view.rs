@@ -12,7 +12,7 @@ use git::repository::RepoPath;
 use gpui::{
     AnyElement, App, AppContext as _, AsyncWindowContext, Entity, EventEmitter, FocusHandle,
     Focusable, IntoElement, ParentElement as _, Render, SharedString, Styled as _, Subscription,
-    Task, WeakEntity, Window, div, px,
+    Task, WeakEntity, Window,
 };
 use language::{Buffer, Capability, LineEnding};
 use multi_buffer::MultiBuffer;
@@ -21,12 +21,11 @@ use project::git_store::{GitStore, Repository};
 use settings::Settings;
 use std::any::{Any, TypeId};
 use std::sync::Arc;
-use ui::{
-    ActiveTheme as _, Button, ButtonCommon as _, Clickable as _, Color, Icon, IconName, Label,
-    LabelCommon as _, LabelSize, Tooltip, v_flex,
-};
+use ui::prelude::*;
+use ui::{Tooltip, h_flex};
 use workspace::{
-    Item, ItemHandle as _, ItemNavHistory, Workspace,
+    Item, ItemHandle, ItemNavHistory, ToolbarItemEvent, ToolbarItemLocation, ToolbarItemView,
+    Workspace,
     item::{ItemEvent, TabContentParams},
     searchable::SearchableItemHandle,
 };
@@ -277,21 +276,9 @@ impl GitFileDiffView {
         }
     }
 
-    /// Open the file history view for this file.
-    fn view_file_history(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
-        crate::file_history_view::FileHistoryView::open(
-            self.repo_path.clone(),
-            self.git_store.clone(),
-            self.repository.clone(),
-            self.workspace.clone(),
-            window,
-            cx,
-        );
-    }
-
-    /// Navigate to the previous commit of this file by opening a CommitView
-    /// for the most recent commit of this file, filtered to show only this file's changes.
-    fn view_last_commit(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
+    /// Navigate to the most recent commit that touched this file, opening a
+    /// `CommitView` filtered to just this file's changes.
+    pub fn view_last_commit(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
         let repository = self.repository.clone();
         let workspace = self.workspace.clone();
         let git_store = self.git_store.clone();
@@ -448,49 +435,67 @@ impl Item for GitFileDiffView {
 }
 
 impl Render for GitFileDiffView {
-    fn render(&mut self, _: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
-        v_flex()
-            .size_full()
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap_2()
-                    .px_3()
-                    .py_1()
-                    .h(px(36.))
-                    .flex_none()
-                    .border_b_1()
-                    .border_color(cx.theme().colors().border)
-                    .bg(cx.theme().colors().editor_background)
-                    .child(
-                        Button::new("last-commit-btn", "← Last Commit")
-                            .tooltip(|_, cx| {
-                                Tooltip::simple(
-                                    "View the last commit's changes for this file",
-                                    cx,
-                                )
-                            })
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.view_last_commit(window, cx);
-                            })),
-                    )
-                    .child(
-                        Button::new("file-history-btn", "All History")
-                            .tooltip(|_, cx| {
-                                Tooltip::simple("View the full commit history of this file", cx)
-                            })
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.view_file_history(window, cx);
-                            })),
-                    )
-                    .child(
-                        Label::new(self.display_title())
-                            .size(LabelSize::Small)
-                            .color(Color::Muted),
-                    ),
-            )
-            .child(self.editor.clone())
+    fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+        v_flex().size_full().child(self.editor.clone())
+    }
+}
+
+/// Toolbar that activates for `GitFileDiffView` and provides quick access
+/// to the last commit touching this file (opens a filtered `CommitView`).
+pub struct GitFileDiffViewToolbar {
+    view: Option<WeakEntity<GitFileDiffView>>,
+}
+
+impl GitFileDiffViewToolbar {
+    pub fn new() -> Self {
+        Self { view: None }
+    }
+}
+
+impl Default for GitFileDiffViewToolbar {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl EventEmitter<ToolbarItemEvent> for GitFileDiffViewToolbar {}
+
+impl Render for GitFileDiffViewToolbar {
+    fn render(&mut self, _window: &mut Window, _cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        let Some(view) = self.view.as_ref().and_then(|w| w.upgrade()) else {
+            return h_flex();
+        };
+        h_flex().gap_1().child(
+            IconButton::new("view-last-commit", IconName::HistoryRerun)
+                .icon_size(IconSize::Small)
+                .tooltip(Tooltip::text("View the last commit that touched this file"))
+                .on_click(move |_, window, cx| {
+                    view.update(cx, |view, cx| view.view_last_commit(window, cx));
+                }),
+        )
+    }
+}
+
+impl ToolbarItemView for GitFileDiffViewToolbar {
+    fn set_active_pane_item(
+        &mut self,
+        active_pane_item: Option<&dyn ItemHandle>,
+        _: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> ToolbarItemLocation {
+        if let Some(entity) = active_pane_item.and_then(|i| i.act_as::<GitFileDiffView>(cx)) {
+            self.view = Some(entity.downgrade());
+            return ToolbarItemLocation::PrimaryRight;
+        }
+        self.view = None;
+        ToolbarItemLocation::Hidden
+    }
+
+    fn pane_focus_update(
+        &mut self,
+        _pane_focused: bool,
+        _window: &mut Window,
+        _cx: &mut gpui::Context<Self>,
+    ) {
     }
 }
