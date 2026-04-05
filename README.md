@@ -13,3 +13,13 @@ Or clone the repo and ask Claude/Codex/AI assistant of your choice to build it f
 > This is slow because it was a debug build!! It's not actually that slow otherwise I wouldnt use it myself lol
 
 https://github.com/user-attachments/assets/d6c52cb9-b933-4061-8691-6786a2ffca00
+
+To get the same behavior as in the video set this ✨ new ✨ setting:
+
+```json
+{
+  "git_panel": {
+    "single_file_diff": true
+  }
+}
+```
