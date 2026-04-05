@@ -1,19 +1,20 @@
 //! GitFileDiffView - A VSCode-style single file diff view.
 //!
 //! Shows a single file's diff in a dedicated tab using SplittableEditor.
-//! Left side: HEAD content (read-only). Right side: working copy.
-//! Has a "Previous Commit" button to navigate through file history.
+//! The [`DiffBase`] determines what is compared:
+//! - [`DiffBase::WorkingVsIndex`]: LHS = index, RHS = working copy (unstaged hunks).
+//! - [`DiffBase::IndexVsHead`]: LHS = HEAD, RHS = index via a read-only scratch buffer (staged hunks).
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use buffer_diff::BufferDiff;
 use editor::{Editor, EditorEvent, EditorSettings, SplittableEditor};
 use git::repository::RepoPath;
 use gpui::{
-    AnyElement, App, AppContext as _, Entity, EventEmitter, FocusHandle, Focusable, IntoElement,
-    ParentElement as _, Render, SharedString, Styled as _, Subscription, Task, WeakEntity, Window,
-    div, px,
+    AnyElement, App, AppContext as _, AsyncWindowContext, Entity, EventEmitter, FocusHandle,
+    Focusable, IntoElement, ParentElement as _, Render, SharedString, Styled as _, Subscription,
+    Task, WeakEntity, Window, div, px,
 };
-use language::Buffer;
+use language::{Buffer, Capability, LineEnding};
 use multi_buffer::MultiBuffer;
 use project::ProjectPath;
 use project::git_store::{GitStore, Repository};
@@ -30,8 +31,27 @@ use workspace::{
     searchable::SearchableItemHandle,
 };
 
+/// Selects which diff the view shows.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum DiffBase {
+    /// Working copy vs index (unstaged hunks).
+    WorkingVsIndex,
+    /// Index vs HEAD (staged hunks).
+    IndexVsHead,
+}
+
+impl DiffBase {
+    fn label(self) -> &'static str {
+        match self {
+            DiffBase::WorkingVsIndex => "Working ↔ Index",
+            DiffBase::IndexVsHead => "Index ↔ HEAD",
+        }
+    }
+}
+
 pub struct GitFileDiffView {
     repo_path: RepoPath,
+    diff_base: DiffBase,
     repository: WeakEntity<Repository>,
     git_store: WeakEntity<GitStore>,
     workspace: WeakEntity<Workspace>,
@@ -43,10 +63,16 @@ pub struct GitFileDiffView {
 }
 
 impl GitFileDiffView {
-    /// Open a single file diff view for working copy vs HEAD.
+    /// Open a single file diff view.
+    ///
+    /// If the active pane already contains a `GitFileDiffView` for the same
+    /// `(repo_path, diff_base)` pair, that tab is activated instead of a new
+    /// one being created. The newly opened (or re-activated) tab is marked as
+    /// the pane's preview item.
     pub fn open(
         project_path: ProjectPath,
         repo_path: RepoPath,
+        diff_base: DiffBase,
         repository: Entity<Repository>,
         workspace: WeakEntity<Workspace>,
         window: &mut Window,
@@ -54,25 +80,85 @@ impl GitFileDiffView {
     ) -> Task<Result<Entity<Self>>> {
         let workspace_entity = match workspace.upgrade() {
             Some(w) => w,
-            None => return Task::ready(Err(anyhow::anyhow!("workspace gone"))),
+            None => return Task::ready(Err(anyhow!("workspace gone"))),
         };
+
+        // Dedup: if an existing view with the same (repo_path, diff_base)
+        // is already in the active pane, re-activate it as a preview item.
+        let existing = workspace_entity.update(cx, |workspace, cx| {
+            let pane = workspace.active_pane().clone();
+            let found = pane.read(cx).items().enumerate().find_map(|(ix, item)| {
+                let view = item.downcast::<Self>()?;
+                let view_ref = view.read(cx);
+                if view_ref.repo_path == repo_path && view_ref.diff_base == diff_base {
+                    Some((ix, view))
+                } else {
+                    None
+                }
+            });
+            found.map(|(ix, view)| (pane, ix, view))
+        });
+        if let Some((pane, ix, view)) = existing {
+            pane.update(cx, |pane, cx| {
+                pane.activate_item(ix, true, true, window, cx);
+                pane.replace_preview_item_id(view.item_id(), window, cx);
+            });
+            return Task::ready(Ok(view));
+        }
+
         let project = workspace_entity.read(cx).project().clone();
         let git_store = project.read(cx).git_store().clone();
 
         window.spawn(cx, async move |cx| {
-            // Open the working copy buffer
-            let new_buffer = project
-                .update(cx, |project, cx| {
-                    project.open_buffer(project_path.clone(), cx)
-                })
-                .await?;
+            let (display_buffer, diff) = match diff_base {
+                DiffBase::WorkingVsIndex => {
+                    // Working buffer as RHS; diff base is the index text. The
+                    // resulting hunks are precisely the unstaged ones.
+                    let working_buffer = project
+                        .update(cx, |project, cx| {
+                            project.open_buffer(project_path.clone(), cx)
+                        })
+                        .await?;
+                    let unstaged_diff = git_store
+                        .update(cx, |git_store, cx| {
+                            git_store.open_unstaged_diff(working_buffer.clone(), cx)
+                        })
+                        .await?;
+                    (working_buffer, unstaged_diff)
+                }
+                DiffBase::IndexVsHead => {
+                    // Open the project buffer only to obtain a BufferId and
+                    // the file's language; the RHS is a read-only scratch
+                    // buffer populated with the index text.
+                    let project_buffer = project
+                        .update(cx, |project, cx| {
+                            project.open_buffer(project_path.clone(), cx)
+                        })
+                        .await?;
+                    let (buffer_id, language) = project_buffer.update(cx, |buffer, _| {
+                        (buffer.remote_id(), buffer.language().cloned())
+                    });
 
-            // Create a diff with HEAD as the base (None means HEAD)
-            let diff = git_store
-                .update(cx, |git_store, cx| {
-                    git_store.open_diff_since(None, new_buffer.clone(), repository.clone(), cx)
-                })
-                .await?;
+                    let (head_text, index_text) = repository
+                        .update(cx, |repo, cx| {
+                            repo.head_and_index_text(buffer_id, repo_path.clone(), cx)
+                        })
+                        .await?;
+
+                    let mut scratch_text = index_text.unwrap_or_default();
+                    LineEnding::normalize(&mut scratch_text);
+                    let scratch_buffer = cx.new(|cx| {
+                        let mut buffer = Buffer::local(scratch_text, cx);
+                        buffer.set_language(language, cx);
+                        buffer.set_capability(Capability::ReadOnly, cx);
+                        buffer
+                    });
+
+                    let diff =
+                        Self::build_index_vs_head_diff(&scratch_buffer, head_text, cx).await?;
+                    (scratch_buffer, diff)
+                }
+            };
 
             let repository_weak = repository.downgrade();
             let git_store_weak = git_store.downgrade();
@@ -80,7 +166,8 @@ impl GitFileDiffView {
                 let diff_view = cx.new(|cx| {
                     Self::new(
                         repo_path,
-                        new_buffer,
+                        diff_base,
+                        display_buffer,
                         diff,
                         repository_weak,
                         git_store_weak,
@@ -92,14 +179,45 @@ impl GitFileDiffView {
                 let pane = workspace.active_pane();
                 pane.update(cx, |pane, cx| {
                     pane.add_item(Box::new(diff_view.clone()), true, true, None, window, cx);
+                    pane.replace_preview_item_id(diff_view.item_id(), window, cx);
                 });
                 diff_view
             })
         })
     }
 
+    async fn build_index_vs_head_diff(
+        buffer: &Entity<Buffer>,
+        head_text: Option<String>,
+        cx: &mut AsyncWindowContext,
+    ) -> Result<Entity<BufferDiff>> {
+        let mut head_text = head_text;
+        if let Some(text) = head_text.as_mut() {
+            LineEnding::normalize(text);
+        }
+        let (language, snapshot) = buffer.update(cx, |buffer, _| {
+            (buffer.language().cloned(), buffer.text_snapshot())
+        });
+        let diff = cx.new(|cx| BufferDiff::new(&snapshot, cx));
+        let update = diff
+            .update(cx, |diff, cx| {
+                diff.update_diff(
+                    snapshot.clone(),
+                    head_text.map(|text| Arc::from(text.as_str())),
+                    Some(true),
+                    language,
+                    cx,
+                )
+            })
+            .await;
+        diff.update(cx, |diff, cx| diff.set_snapshot(update, &snapshot, cx))
+            .await;
+        Ok(diff)
+    }
+
     fn new(
         repo_path: RepoPath,
+        diff_base: DiffBase,
         new_buffer: Entity<Buffer>,
         diff: Entity<BufferDiff>,
         repository: WeakEntity<Repository>,
@@ -149,6 +267,7 @@ impl GitFileDiffView {
 
         Self {
             repo_path,
+            diff_base,
             repository,
             git_store,
             workspace: workspace_weak,
@@ -218,7 +337,7 @@ impl GitFileDiffView {
 
     fn display_title(&self) -> SharedString {
         let file_name = self.repo_path.file_name().unwrap_or("untitled");
-        format!("{} (Working ↔ HEAD)", file_name).into()
+        format!("{} ({})", file_name, self.diff_base.label()).into()
     }
 }
 

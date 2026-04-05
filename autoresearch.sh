@@ -18,7 +18,7 @@ fi
 
 # Issue 2: dedup tabs by (repo_path, diff_base). Look for activation of existing
 #   GitFileDiffView in open(), mirroring the commit_view.rs:148 pattern.
-if grep -Pzo '(?s)pane\.items\(\).*?downcast::<Self>\(\).*?activate_item' \
+if grep -Pzo '(?s)\.items\(\).*?downcast::<Self>\(\).*?activate_item' \
        crates/git_ui/src/git_file_diff_view.rs > /dev/null 2>&1; then
     issues_fixed=$((issues_fixed + 1))
 fi

@@ -6580,6 +6580,44 @@ impl Repository {
         cx.spawn(|_: &mut AsyncApp| async move { rx.await? })
     }
 
+    /// Loads both the HEAD and index text for a file in one round-trip.
+    /// Returns `(head_text, index_text)`. Used by `GitFileDiffView` to build
+    /// an `Index ↔ HEAD` diff without issuing two separate loads.
+    pub fn head_and_index_text(
+        &mut self,
+        buffer_id: BufferId,
+        repo_path: RepoPath,
+        cx: &App,
+    ) -> Task<Result<(Option<String>, Option<String>)>> {
+        let rx = self.send_job(None, move |state, _| async move {
+            match state {
+                RepositoryState::Local(LocalRepositoryState { backend, .. }) => {
+                    let head_text = backend.load_committed_text(repo_path.clone()).await;
+                    let index_text = backend.load_index_text(repo_path).await;
+                    anyhow::Ok((head_text, index_text))
+                }
+                RepositoryState::Remote(RemoteRepositoryState { project_id, client }) => {
+                    use proto::open_uncommitted_diff_response::Mode;
+                    let response = client
+                        .request(proto::OpenUncommittedDiff {
+                            project_id: project_id.to_proto(),
+                            buffer_id: buffer_id.to_proto(),
+                        })
+                        .await?;
+                    let mode = Mode::from_i32(response.mode).context("Invalid mode")?;
+                    let (head_text, index_text) = match mode {
+                        Mode::IndexMatchesHead => {
+                            (response.committed_text.clone(), response.committed_text)
+                        }
+                        Mode::IndexAndHead => (response.committed_text, response.staged_text),
+                    };
+                    Ok((head_text, index_text))
+                }
+            }
+        });
+        cx.spawn(|_: &mut AsyncApp| async move { rx.await? })
+    }
+
     pub fn load_blob_content(&mut self, oid: Oid, cx: &App) -> Task<Result<String>> {
         let repository_id = self.snapshot.id;
         let rx = self.send_job(None, move |state, _| async move {

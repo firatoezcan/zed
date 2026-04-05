@@ -1351,6 +1351,7 @@ impl GitPanel {
     }
 
     fn open_single_file_diff(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use crate::git_file_diff_view::DiffBase;
         maybe!({
             let entry = self.entries.get(self.selected_entry?)?.status_entry()?;
             let active_repo = self.active_repository.as_ref()?;
@@ -1361,6 +1362,13 @@ impl GitPanel {
                 return None;
             }
 
+            // Clicking a staged entry shows `Index ↔ HEAD`; everything else
+            // (unstaged, or no section resolved) shows `Working ↔ Index`.
+            let diff_base = match self.section_for_selected_entry() {
+                Some(Section::Staged) => DiffBase::IndexVsHead,
+                _ => DiffBase::WorkingVsIndex,
+            };
+
             let repo_path = entry.repo_path.clone();
             let repository = active_repo.clone();
             let workspace = self.workspace.clone();
@@ -1368,6 +1376,7 @@ impl GitPanel {
             let open_task = crate::git_file_diff_view::GitFileDiffView::open(
                 path,
                 repo_path,
+                diff_base,
                 repository,
                 workspace.clone(),
                 window,
@@ -5453,20 +5462,13 @@ impl GitPanel {
                                     cx,
                                 )
                             })
-                            .on_click({
-                                let this = this.clone();
-                                move |_, window, cx| {
-                                    this.update(cx, |this, cx| {
-                                        this.selected_entry = Some(ix);
-                                        this.open_file(
-                                            &Default::default(),
-                                            window,
-                                            cx,
-                                        );
-                                        cx.stop_propagation();
-                                    })
-                                    .ok();
-                                }
+                            .on_click(move |_, window, cx| {
+                                this.update(cx, |this, cx| {
+                                    this.selected_entry = Some(ix);
+                                    this.open_file(&Default::default(), window, cx);
+                                    cx.stop_propagation();
+                                })
+                                .ok();
                             }),
                         ),
                 )
