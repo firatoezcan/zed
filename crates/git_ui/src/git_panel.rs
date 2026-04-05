@@ -5522,7 +5522,9 @@ impl GitPanel {
             )
             .on_click({
                 cx.listener(move |this, event: &ClickEvent, window, cx| {
-                    if event.modifiers().control {
+                    // Alt+Click toggles multi-select on this entry; Ctrl/Cmd+Click
+                    // falls through to open_file below (same as menu::SecondaryConfirm).
+                    if event.modifiers().alt {
                         this.toggle_marked_entry(ix);
                         cx.notify();
                         return;
