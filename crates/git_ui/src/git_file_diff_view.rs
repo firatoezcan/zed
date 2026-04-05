@@ -100,7 +100,6 @@ impl GitFileDiffView {
         if let Some((pane, ix, view)) = existing {
             pane.update(cx, |pane, cx| {
                 pane.activate_item(ix, true, true, window, cx);
-                pane.replace_preview_item_id(view.item_id(), window, cx);
             });
             return Task::ready(Ok(view));
         }
@@ -177,7 +176,18 @@ impl GitFileDiffView {
                 });
                 let pane = workspace.active_pane();
                 pane.update(cx, |pane, cx| {
-                    pane.add_item(Box::new(diff_view.clone()), true, true, None, window, cx);
+                    // Close the old preview *first* so the new item can
+                    // take its slot directly. Closing after adding leaves
+                    // `active_item_index` dangling one past the end.
+                    let destination_index = pane.close_current_preview_item(window, cx);
+                    pane.add_item(
+                        Box::new(diff_view.clone()),
+                        true,
+                        true,
+                        destination_index,
+                        window,
+                        cx,
+                    );
                     pane.replace_preview_item_id(diff_view.item_id(), window, cx);
                 });
                 diff_view
@@ -367,6 +377,13 @@ impl Item for GitFileDiffView {
 
     fn telemetry_event_text(&self) -> Option<&'static str> {
         Some("Git File Diff View Opened")
+    }
+
+    fn preserve_preview(&self, _cx: &App) -> bool {
+        // The diff view itself is not user-editable — `BufferRangesUpdated`
+        // events get emitted as the multibuffer finishes loading diff hunks,
+        // which would otherwise un-preview the tab immediately.
+        true
     }
 
     fn deactivated(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
