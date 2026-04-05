@@ -1,12 +1,20 @@
 #!/usr/bin/env bash
-# Drives the release zed binary via xdotool to verify each of the 5
-# UX fixes. Takes a screenshot after each step. The agent inspects the
-# screenshots via its multimodal Read tool.
+# GUI verification harness for the 5 GitFileDiffView UX fixes.
+#
+# Drives the debug zed build via xdotool/ImageMagick and captures a
+# screenshot after each step so the agent can visually inspect tab
+# titles, tab counts, panel state, and toolbar buttons. All clicks
+# use GLOBAL screen coordinates — xdotool's `--window <id>` flag does
+# not deliver events to gpui's input loop on X11 (learned the hard way).
 #
 # Requirements:
-#   - DISPLAY must be set (X11)
-#   - xdotool, import (ImageMagick) installed
-#   - target/debug/zed exists (cargo build -p zed --release)
+#   - DISPLAY set (X11 only — untested on Wayland)
+#   - xdotool, ImageMagick's `import`+`convert`
+#   - target/debug/zed built with local changes
+#
+# Usage:
+#   bash verify/git_test_setup.sh      # create the fixture repo
+#   bash verify/verify_ui.sh           # run the full loop
 
 set -euo pipefail
 
@@ -15,108 +23,103 @@ cd "$(dirname "$0")/.."
 REPO_DIR="/tmp/zed-verify-repo"
 SHOTS_DIR="verify/shots"
 ZED_BIN="target/debug/zed"
-ZED_LOG="/tmp/zed-verify.log"
+USER_DATA_DIR="/tmp/zed-verify-userdata"
 
 if [[ ! -x "$ZED_BIN" ]]; then
-    echo "error: $ZED_BIN not found. Run 'cargo build -p zed' first." >&2
+    echo "error: $ZED_BIN missing — run 'cargo build -p zed' first." >&2
     exit 1
 fi
-
 if [[ ! -d "$REPO_DIR/.git" ]]; then
-    echo "error: test repo missing — run verify/git_test_setup.sh first." >&2
+    echo "error: $REPO_DIR missing — run 'bash verify/git_test_setup.sh' first." >&2
     exit 1
 fi
 
 rm -rf "$SHOTS_DIR"
 mkdir -p "$SHOTS_DIR"
 
-# Kill any leftover zed from previous runs.
-pkill -f "target/debug/zed" 2>/dev/null || true
-sleep 1
-
-# Launch zed with the test repo. --foreground keeps the process attached.
-echo "[verify] launching zed with $REPO_DIR"
-"$ZED_BIN" --foreground "$REPO_DIR" > "$ZED_LOG" 2>&1 &
-ZED_PID=$!
-echo "[verify] zed pid=$ZED_PID"
-
-cleanup() {
-    echo "[verify] killing zed pid=$ZED_PID"
-    kill "$ZED_PID" 2>/dev/null || true
-    sleep 1
-    kill -9 "$ZED_PID" 2>/dev/null || true
-}
-trap cleanup EXIT
-
-# Wait for the zed window to appear.
-echo "[verify] waiting for zed window..."
-for _ in {1..30}; do
-    WIN=$(xdotool search --name "zed-verify-repo" 2>/dev/null | head -1 || true)
-    if [[ -n "$WIN" ]]; then
-        break
-    fi
-    WIN=$(xdotool search --name "Zed" 2>/dev/null | head -1 || true)
-    if [[ -n "$WIN" ]]; then
-        break
-    fi
-    sleep 0.5
-done
-
+# Fresh zed instance.
+bash verify/launch_zed.sh >/dev/null
+WIN=$(xdotool search --name "zed-verify-repo" | head -1)
 if [[ -z "$WIN" ]]; then
-    echo "[verify] ERROR: zed window did not appear within 15s"
-    tail -20 "$ZED_LOG" >&2
-    exit 2
+    echo "error: zed window not found" >&2
+    exit 1
 fi
+echo "[verify] window=$WIN"
 
-echo "[verify] zed window id=$WIN"
 xdotool windowactivate --sync "$WIN"
 xdotool windowsize "$WIN" 1600 1000
 xdotool windowmove "$WIN" 50 50
 sleep 2
 
+# Window-local → screen coords: (x + 50, y + 50).
+# Panel row centres observed from reference shots (1600×1000, 50,50 offset):
+STAGED_README_XY="135 168"    # row at window-local 85, 118
+STAGED_CONFIG_XY="135 196"    # window-local 85, 146
+UNSTAGED_README_XY="135 252"  # window-local 85, 202
+UNSTAGED_GREET_XY="135 280"   # window-local 85, 230
+TOOLBAR_LAST_COMMIT_XY="435 143"  # HistoryRerun icon in diff-view toolbar
+CV_OLDER_XY="1490 145"            # ← in CommitViewToolbar
+CV_NEWER_XY="1520 145"            # → in CommitViewToolbar
+
 shot() {
-    local name="$1"
-    local path="$SHOTS_DIR/$name.png"
-    # Give zed a moment to finish repainting before capturing.
     sleep 0.6
-    import -window "$WIN" "$path"
-    echo "[verify] wrote $path"
+    import -window "$WIN" "$SHOTS_DIR/$1.png"
+    echo "[verify] $SHOTS_DIR/$1.png"
 }
 
-key() {
-    xdotool windowactivate --sync "$WIN"
-    xdotool key --window "$WIN" "$@"
+gclick() {
+    xdotool mousemove "$1" "$2"
+    sleep 0.3
+    xdotool click 1
+    sleep 1.5
 }
 
-click_at() {
-    local x="$1" y="$2"
-    local count="${3:-1}"
-    xdotool windowactivate --sync "$WIN"
-    xdotool mousemove --sync --window "$WIN" "$x" "$y"
-    xdotool click --window "$WIN" --repeat "$count" --delay 100 1
-}
-
-click_with_modifier() {
-    local modifier="$1" x="$2" y="$3"
-    xdotool windowactivate --sync "$WIN"
-    xdotool mousemove --sync --window "$WIN" "$x" "$y"
-    xdotool keydown "$modifier"
-    xdotool click --window "$WIN" 1
-    xdotool keyup "$modifier"
+gclick_mod() {
+    xdotool mousemove "$2" "$3"
+    sleep 0.3
+    xdotool keydown "$1"
+    xdotool click 1
+    xdotool keyup "$1"
+    sleep 1.5
 }
 
 echo "[verify] step 0: baseline"
-shot "00_launched"
+shot 00_launched
 
 echo "[verify] step 1: open git panel"
-key "ctrl+shift+g"
+xdotool key --window "$WIN" ctrl+shift+g
 sleep 1
-shot "01_git_panel"
+shot 01_git_panel
 
-echo "[verify] step 2: click unstaged entry (Working ↔ Index)"
-# Guessing panel row positions — will refine after inspecting shot 01.
-# The git panel is on the left, sections are Staged then Unstaged.
-# We need to locate a row with the filename in the panel.
-# For now, just take a shot; the agent reads shots and refines coords.
+echo "[verify] step 2: click STAGED README.md → tab '(Index ↔ HEAD)'"
+gclick $STAGED_README_XY
+shot 02_staged_click
 
-echo "[verify] done. inspect $SHOTS_DIR/"
+echo "[verify] step 3: click UNSTAGED README.md → tab '(Working ↔ Index)' replaces"
+gclick $UNSTAGED_README_XY
+shot 03_unstaged_click
+
+echo "[verify] step 4: dedup — click same entry 3 times, tab stays one"
+gclick $UNSTAGED_README_XY
+gclick $UNSTAGED_README_XY
+gclick $UNSTAGED_README_XY
+shot 04_dedup
+
+echo "[verify] step 5: Ctrl+Click on greet.py → raw file tab"
+gclick_mod ctrl $UNSTAGED_GREET_XY
+shot 05_ctrl_click
+
+echo "[verify] step 6: open diff for greet.py, then Last Commit toolbar"
+xdotool key --window "$WIN" ctrl+shift+g
+sleep 1
+gclick $UNSTAGED_GREET_XY
+gclick $TOOLBAR_LAST_COMMIT_XY
+shot 06_last_commit
+
+echo "[verify] step 7: navigate to older commit via CommitViewToolbar"
+gclick $CV_OLDER_XY
+shot 07_older_commit
+
+echo "[verify] done. shots saved under $SHOTS_DIR/"
+echo "[verify] crop tab area with:"
+echo "         convert $SHOTS_DIR/<N>.png -crop 1400x50+180+45 $SHOTS_DIR/<N>_tabs.png"
