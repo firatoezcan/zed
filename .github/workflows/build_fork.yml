@@ -1,0 +1,116 @@
+name: build_fork
+
+on:
+  workflow_dispatch:
+    inputs:
+      platforms:
+        description: 'Which platforms to build (comma-separated: linux,macos,windows)'
+        required: false
+        default: 'linux,macos,windows'
+        type: string
+
+# Only run on forks — upstream has its own bundling workflow on custom runners.
+# Switch the condition to your fork owner if you use this.
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: '0'
+  RUST_BACKTRACE: '1'
+
+jobs:
+  linux:
+    if: contains(inputs.platforms, 'linux')
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install Linux deps
+        run: |
+          sudo apt-get update
+          ./script/linux
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: linux-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: linux-cargo-
+      - name: Build zed (release)
+        run: cargo build --release -p zed
+      - name: Package
+        run: |
+          mkdir -p dist
+          cp target/release/zed dist/zed
+          cd dist
+          tar czf ../zed-linux-x86_64.tar.gz zed
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zed-linux-x86_64
+          path: zed-linux-x86_64.tar.gz
+          if-no-files-found: error
+
+  macos:
+    if: contains(inputs.platforms, 'macos')
+    runs-on: macos-14
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: macos-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: macos-cargo-
+      - name: Build zed (release, arm64)
+        run: cargo build --release -p zed
+      - name: Package
+        run: |
+          mkdir -p dist
+          cp target/release/zed dist/zed
+          cd dist
+          tar czf ../zed-macos-aarch64.tar.gz zed
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zed-macos-aarch64
+          path: zed-macos-aarch64.tar.gz
+          if-no-files-found: error
+
+  windows:
+    if: contains(inputs.platforms, 'windows')
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: windows-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: windows-cargo-
+      - name: Build zed (release)
+        run: cargo build --release -p zed
+        shell: pwsh
+      - name: Package
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item target/release/zed.exe dist/zed.exe
+          Compress-Archive -Path dist/zed.exe -DestinationPath zed-windows-x86_64.zip -Force
+        shell: pwsh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zed-windows-x86_64
+          path: zed-windows-x86_64.zip
+          if-no-files-found: error
