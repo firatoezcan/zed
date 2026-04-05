@@ -103,4 +103,60 @@ arrows when file_filter is present.
 
 ## What's Been Tried
 
-_Populated as experiments run._
+Session 1 (2026-04-05): all 5 issues fixed in four commits after the
+infrastructure commit.
+
+- **Run 1 (keep, `issues_fixed: 0 → 1`)**: Switched the row
+  `.on_click` handler in `git_panel.rs` from `modifiers().control` to
+  `modifiers().alt` so Ctrl/Cmd+Click falls through to the
+  `secondary()` branch and calls `open_file`. ASI: the shadowing
+  happened because a later feature (multi-select via `marked_entries`)
+  reused the most natural modifier without checking the existing
+  Ctrl+Click open-file convention. Rule of thumb: when adding a new
+  modifier-based gesture, grep for other handlers on the same element
+  first.
+
+- **Run 2 (keep, `issues_fixed: 1 → 4`)**: Issues 1-3 bundled because
+  they all touch `GitFileDiffView::open`. Added `DiffBase` enum,
+  refactored `open()` to branch on it (unstaged → `open_unstaged_diff`,
+  staged → scratch buffer + custom `BufferDiff` vs HEAD), added dedup
+  on `(repo_path, diff_base)` before `add_item`, called
+  `replace_preview_item_id` so tabs open as preview. Also added
+  `Repository::head_and_index_text` helper so the staged path can load
+  both texts in one round-trip. ASI: the existing `open_diff_since(None, ...)`
+  call was semantically wrong (the `None` sets `set_base_text(None)`,
+  which isn't HEAD; the diff that users saw was driven by the secondary
+  (unstaged) diff, so the "Working ↔ HEAD" label lied). The scratch
+  buffer path for `IndexVsHead` copies the pattern from commit_view's
+  `build_buffer_diff`: `BufferDiff::new` + `update_diff().await` +
+  `set_snapshot(update, ...).await`.
+- **Run 3 (keep, `issues_fixed: 4 → 5`)**: Moved "Last Commit" to a
+  new `GitFileDiffViewToolbar` registered in zed.rs. Dropped the
+  custom header div and the "All History" button from render. Extended
+  `CommitViewToolbar` with prev/next arrows that appear only when the
+  underlying `CommitView` has a `file_filter`; each arrow loads the
+  file's history via `Repository::file_history_paginated`, finds the
+  current SHA's index, and opens the adjacent commit. CommitView now
+  stores `file_filter` and `workspace` weak ref. Dedup in
+  `CommitView::open` now includes `file_filter` so filtered and
+  unfiltered commit views don't clash. ASI: `ToolbarItemView` requires
+  `use workspace::ItemHandle` (the trait) not `ItemHandle as _` when
+  the trait's name appears in a function signature.
+
+### Pre-existing clippy warning
+
+Fixed a redundant `.clone()` on `this` in the open-file IconButton
+handler at `git_panel.rs:5466` (it was the last use of `this`). This
+was pre-existing but blocked `./script/clippy`, so it had to go.
+
+### Files Touched
+
+- `crates/git_ui/src/git_file_diff_view.rs` (rewrite: DiffBase, open,
+  new, display_title, render, toolbar; removed view_file_history)
+- `crates/git_ui/src/git_panel.rs` (Alt+Click, DiffBase in
+  `open_single_file_diff`, redundant clone fix)
+- `crates/git_ui/src/commit_view.rs` (file_filter +
+  workspace fields, file-history navigation)
+- `crates/project/src/git_store.rs` (new `head_and_index_text` on
+  Repository)
+- `crates/zed/src/zed.rs` (register GitFileDiffViewToolbar)
