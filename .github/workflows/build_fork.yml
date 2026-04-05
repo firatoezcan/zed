@@ -56,10 +56,19 @@ jobs:
     if: contains(inputs.platforms, 'macos')
     runs-on: macos-14
     timeout-minutes: 90
+    # macos-14 defaults to Xcode 15.4, whose libc++ C++20 ranges/pointer_traits
+    # implementation cannot compile webrtc-sys/livekit_client's rust::Slice::iterator
+    # (implicit instantiation of undefined template
+    # std::__pointer_traits_element_type<rust::Slice<..>::iterator>).
+    # Xcode 16.2 ships a newer libc++ that handles this correctly.
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.2.app/Contents/Developer
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Select Xcode 16.2
+        run: sudo xcode-select -s /Applications/Xcode_16.2.app/Contents/Developer
       - uses: actions/cache@v4
         with:
           path: |
@@ -87,16 +96,26 @@ jobs:
     if: contains(inputs.platforms, 'windows')
     runs-on: windows-latest
     timeout-minutes: 120
+    # Cargo needs to check out the python-environment-tools git dep whose paths
+    # exceed Windows' default MAX_PATH (260). Enable git long-path support and
+    # move CARGO_HOME to a short root path so nested checkout paths fit.
+    env:
+      CARGO_HOME: C:\c
     steps:
+      - name: Enable Windows long paths
+        shell: pwsh
+        run: |
+          git config --global core.longpaths true
+          git config --system core.longpaths true
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
       - uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
+            C:\c\registry\index
+            C:\c\registry\cache
+            C:\c\git\db
             target
           key: windows-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: windows-cargo-
