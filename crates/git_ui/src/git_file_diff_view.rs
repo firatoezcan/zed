@@ -463,6 +463,11 @@ impl Render for GitFileDiffView {
 pub struct GitFileDiffViewToolbar {
     target: ToolbarTarget,
     workspace: WeakEntity<Workspace>,
+    // Cached at construction: `set_active_pane_item` runs inside
+    // `workspace.update_in(...)` (via `GitFileDiffView::open`), so reading
+    // the workspace there would double-lease. The project handle is
+    // stable for the lifetime of the workspace, so we keep a weak ref.
+    project: WeakEntity<project::Project>,
 }
 
 enum ToolbarTarget {
@@ -476,6 +481,7 @@ impl GitFileDiffViewToolbar {
         Self {
             target: ToolbarTarget::None,
             workspace: workspace.weak_handle(),
+            project: workspace.project().downgrade(),
         }
     }
 
@@ -485,10 +491,9 @@ impl GitFileDiffViewToolbar {
         window: &mut Window,
         cx: &mut App,
     ) {
-        let Some(workspace) = self.workspace.upgrade() else {
+        let Some(project) = self.project.upgrade() else {
             return;
         };
-        let project = workspace.read(cx).project().clone();
         let git_store = project.read(cx).git_store().clone();
         let Some((repo, repo_path)) = git_store
             .read(cx)
@@ -570,9 +575,8 @@ impl ToolbarItemView for GitFileDiffViewToolbar {
         // only show the button when the file actually lives in a git
         // repository inside the project.
         if let Some(project_path) = item.project_path(cx)
-            && let Some(workspace) = self.workspace.upgrade()
+            && let Some(project) = self.project.upgrade()
         {
-            let project = workspace.read(cx).project().clone();
             let git_store = project.read(cx).git_store();
             if git_store
                 .read(cx)
